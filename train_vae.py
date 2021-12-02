@@ -143,7 +143,7 @@ if __name__ == '__main__':
 
     vae = vae.to(device)
 
-    if not args.use_adam:
+    if not args.use_adamw:
         opt = AdamW(vae.parameters(), lr=LEARNING_RATE, betas=(0.9, 0.999), eps=1e-08, weight_decay=1e-4)
     else:
         opt = Adam(vae.parameters(), lr = LEARNING_RATE)
