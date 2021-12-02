@@ -15,14 +15,11 @@ from dataset import *
 from configs import *
 
 
-COCO_ROOT = "CLEAN_PIXIV"
-
 NUM_SAMPLES = 1
 BATCH_SIZE = 4
-N_ROW = 10
 
 parser = argparse.ArgumentParser(description="")
-parser.add_argument('--ckpt_path', type=str, default='model/vae_weights.pt')
+parser.add_argument('ckpt_path', type=str)
 args = parser.parse_args()
 
 if torch.cuda.is_available():
@@ -51,7 +48,7 @@ vae = vae.to(device)
 transform = [transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)), transforms.ToTensor()]
 transform = transforms.Compose(transform)
 
-train_set = ImageDataset(COCO_ROOT, transform)
+train_set = ImageDataset(DATASET_ROOT, transform)
 train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True)
 
 for _ in range(NUM_SAMPLES):
@@ -61,17 +58,12 @@ for _ in range(NUM_SAMPLES):
         img_codes = vae.get_codebook_indices(img_batch)
         img_batch_decode = vae.decode(img_codes)
         images, recons = map(lambda t: t.detach().cpu(), (img_batch, img_batch_decode))
-        images, recons = map(lambda t: make_grid(t[1].float(), nrow = int(sqrt(BATCH_SIZE)), normalize = True, range = tuple(np.array([[0, 1],[-1,1]])[t[0],:])), enumerate([images, recons]))
+        images, recons = map(lambda t: make_grid(t[1].float(), nrow = int(sqrt(BATCH_SIZE)), normalize = True, value_range = tuple(np.array([[0, 1],[-1,1]])[t[0],:])), enumerate([images, recons]))
 
-        #img_batch_decode -= img_batch_decode.min(1, keepdim=True)[0]
-        #img_batch_decode /= img_batch_decode.max(1, keepdim=True)[0]
-        matplotlib.use('qt5agg')
         _, ax = plt.subplots(1,2,figsize=(8,8))
         ax[0].axis('off')
         ax[0].imshow(images.permute(1,2,0))
         ax[1].axis('off')
         ax[1].imshow(recons.permute(1,2,0))
         plt.show()
-        #plt.tight_layout()
-        #plt.savefig("figure.png")
 

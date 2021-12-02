@@ -13,7 +13,7 @@ from datetime import datetime
 from torch.utils.data import DataLoader
 
 from torch.optim import Adam, AdamW
-from torch.optim.lr_scheduler import ExponentialLR, ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torchvision import transforms, datasets
 from torchvision.utils import make_grid
 from torch.utils.tensorboard import SummaryWriter
@@ -27,19 +27,13 @@ from tqdm import tqdm
 from dataset import *
 from configs import *
 
-BATCH_SIZE = 24
-
-COCO_ROOT = "PIXIV/img_clean"
-SAVE_PATH = "ckpts"
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="")
     parser.add_argument('--epochs', type = int, default = 64)
     parser.add_argument('--save_step', type = int, default = 4)
-    parser.add_argument('--ckpt_path', type = str, default='big_dvae/dVAE_16_-10_0.0625_8192_3_1_512_64.ckpt')
-    parser.add_argument('--ckpt_epoch', type = int, default= 1)
-#   parser.add_argument('--ckpt_path', type = str)
-#   parser.add_argument('--ckpt_epoch', type = int)
+    parser.add_argument('--ckpt_path', type = str)
+    parser.add_argument('--ckpt_epoch', type = int)
 
     train_group = parser.add_argument_group('Training settings')
     train_group.add_argument('--learning_rate', type = float, default = 1e-4, help = 'learning rate')
@@ -51,9 +45,9 @@ if __name__ == '__main__':
     train_group.add_argument('--starting_beta', type = float, default = 0, help = 'starting beta')
     train_group.add_argument('--beta_max', type = float, default = 0, help = 'maximum beta to anneal to')
     train_group.add_argument('--beta_anneal_rate', type = float, default = 1e-6, help = 'beta annealing rate')
-    train_group.add_argument('--num_images_save', type = int, default = 4, help = 'number of images to save')
+    train_group.add_argument('--num_images_save', type = int, default = 4, help = 'number of images to save to tensorboard log')
     train_group.add_argument('--batch_size', type = int, default = 64, help = 'batch_size')
-    train_group.add_argument('--use_adam', action = 'store_true', help = 'use open-ai adamW for schduler')
+    train_group.add_argument('--use_adamw', action = 'store_true', help = 'use open-ai adamW for schduler')
 
     model_group = parser.add_argument_group('Model settings')
     model_group.add_argument('--num_tokens', type = int, default = DVAE_NUM_TOKENS, help = 'number of image tokens')
@@ -61,7 +55,7 @@ if __name__ == '__main__':
     model_group.add_argument('--num_resnet_blocks', type = int, default = DVAE_NUM_RESNET_BLOCKS, help = 'number of residual net blocks')
     model_group.add_argument('--emb_dim', type = int, default = CODEBOOK_DIM, help = 'embedding dimension')
     model_group.add_argument('--hidden_dim', type = int, default = DVAE_HIDDEN_DIM, help = 'hidden dimension')
-#    model_group.add_argument('--kl_div_weight', type = float, default = 0., help = 'weight of KL divergence in the loss function')
+    
     args = parser.parse_args()
 
     NUM_EPOCHS = args.epochs
@@ -69,7 +63,7 @@ if __name__ == '__main__':
     LEARNING_RATE = args.learning_rate
     LR_DECAY_RATE = args.lr_decay_rate
     LR_MIN = args.lr_min
-#    BATCH_SIZE = args.batch_size
+    BATCH_SIZE = args.batch_size
 
     STARTING_TEMP = args.starting_temp
     TEMP_MIN = args.temp_min
@@ -84,7 +78,6 @@ if __name__ == '__main__':
     emb_dim = args.emb_dim
     hidden_dim = args.hidden_dim
     num_resnet_blocks = args.num_resnet_blocks
-    #kl_div_weight = args.beta_max
 
     NUM_IMAGES_SAVE = args.num_images_save
 
@@ -94,15 +87,11 @@ if __name__ == '__main__':
     transform = [transforms.RandomResizedCrop(IMAGE_SIZE,scale=(1,1)),
                  transforms.ToTensor(),
                  transforms.ColorJitter(brightness=0.025, contrast=0.025, saturation=0.2, hue=0),
-#                 transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
                  ]
     transform = transforms.Compose(transform)
 
-    #train_set = get_COCO_images_2014_train(COCO_ROOT, transform)
-    #train_set = datasets.ImageFolder(COCO_ROOT, transform)
-    train_set = ImageDataset(COCO_ROOT, transform)
-    #train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True)
-    train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True, pin_memory=True, persistent_workers=True, num_workers=8)
+    train_set = ImageDataset(DATASET_ROOT, transform)
+    train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True, pin_memory=True, num_workers=8)
 
     if torch.cuda.is_available():
         print("Using cuda")
@@ -120,8 +109,6 @@ if __name__ == '__main__':
         num_resnet_blocks = num_resnet_blocks,
         smooth_l1_loss = True,
         kl_div_loss_weight = 0,
-#        layer_hidden_dim_scale = [1,2,2,4]
-#        kl_div_loss_weight = kl_div_weight
     )
 
     vae_params = {
@@ -145,7 +132,6 @@ if __name__ == '__main__':
         ckpts_dir = os.path.dirname(args.ckpt_path)
         START_EPOCH = args.ckpt_epoch
         dvae_state=torch.load(args.ckpt_path, map_location=torch.device(device))
-        #dvae_state=OrderedDict([(k,dvae_state[k]) for k in list(dvae_state.keys()) if not (('codebook' in k) or ('decoder.0' in k))])
         vae.load_state_dict(dvae_state, strict=False)
     else:
         ckpts_dir = os.path.join(SAVE_PATH, datetime.now().strftime("%Y%m%d%H%M"))
@@ -162,7 +148,6 @@ if __name__ == '__main__':
     else:
         opt = Adam(vae.parameters(), lr = LEARNING_RATE)
 
-    #sched = ExponentialLR(optimizer = opt, gamma = LR_DECAY_RATE)
     sched = ReduceLROnPlateau(
          opt,
          mode="min",
@@ -176,7 +161,6 @@ if __name__ == '__main__':
     global_step = 0
 
     temp = STARTING_TEMP
-
 
     writer = SummaryWriter()
     scaler = GradScaler()
@@ -208,7 +192,7 @@ if __name__ == '__main__':
 
                     images, recons = map(lambda t: t[:k], (images, recons))
                     images, recons, hard_recons, codes = map(lambda t: t.detach().cpu(), (images, recons, hard_recons, codes))
-                    images, recons, hard_recons = map(lambda t: make_grid(t[1].float(), nrow = int(math.sqrt(k)), normalize = True, range = tuple(np.array([[-1, 1],[-1,1],[-1,1]])[t[0],:])), enumerate([images, recons, hard_recons]))
+                    images, recons, hard_recons = map(lambda t: make_grid(t[1].float(), nrow = int(math.sqrt(k)), normalize = True, value_range = tuple(np.array([[-1, 1],[-1,1],[-1,1]])[t[0],:])), enumerate([images, recons, hard_recons]))
 
                     writer.add_image('original images', images, global_step)
                     writer.add_image('reconstructions', recons, global_step)
@@ -228,7 +212,6 @@ if __name__ == '__main__':
 
                     lr = opt.param_groups[0]['lr']
                     sched.step(mean(step_losses))
-                    #sched.step()
                     step_losses = []
                         
                     vae.temperature = temp

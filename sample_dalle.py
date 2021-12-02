@@ -24,7 +24,8 @@ BATCH_SIZE = 4
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description="")
-    #parser.add_argument('--load', type=Path, default=['dalle_params.pt','dalle_weights.pt','vae_params.pt','vae_weights.pt'], nargs='+')
+    parser.add_argument('dvae_ckpt_path', type=str)
+    parser.add_argument('dalle_ckpt_path', type=str)
     args = parser.parse_args()
 
     if torch.cuda.is_available():
@@ -34,8 +35,6 @@ if __name__ == '__main__':
         print("Using cpu")
         device = torch.device("cpu")
 
-    print("Using actual images and dVAE")
-    #vae_params = torch.load("model/vae_params.pt")
     vae = DiscreteVAE(
         image_size = IMAGE_SIZE,
         num_layers = DVAE_NUM_LAYERS,
@@ -44,10 +43,8 @@ if __name__ == '__main__':
         hidden_dim = DVAE_HIDDEN_DIM,
         num_resnet_blocks = DVAE_NUM_RESNET_BLOCKS,
     ).to(device)
-    vae_weights = torch.load("model/vae_weights.pt")
-    vae.load_state_dict(vae_weights)
+    vae.load_state_dict(torch.load(args.dvae_ckpt_path, map_location=torch.device(device)))
     vae = vae.to(device)
-    #dalle_params = torch.load("model/dalle_params.pt")
     dalle = DALLE(
         vae = vae,                  
         dim = CODEBOOK_DIM,
@@ -63,22 +60,16 @@ if __name__ == '__main__':
         shift_tokens = False,
         rotary_emb = False         
     ).to(device)
-    dalle_weights = torch.load("model/dalle_weights.pt")
-    dalle.load_state_dict(dalle_weights)
+    dalle.load_state_dict(torch.load(args.dalle_ckpt_path, map_location=torch.device(device)))
     dalle = dalle.to(device)
 
-    #transform = [transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)), transforms.ToTensor()]
-    #transform = transforms.Compose(transform)
-
-    train_set = TextImageDataset('CLEAN_PIXIV',truncate_captions=True,tokenizer=tokenizer,text_len=80)
+    train_set = PixivFacesDataset(DATASET_ROOT, DALLE_TEXT_SEQ_LEN)
     train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
 
     token_batch,img_batch = next(iter(train_loader))
     token_batch,img_batch = map(lambda t: t.cuda(), (token_batch,img_batch))
 
     with torch.no_grad():
-
-
         img_batch_decode = dalle.generate_images(token_batch, filter_thres = 0.90)
 
         text_batch_decode=[]
@@ -91,15 +82,10 @@ if __name__ == '__main__':
         images = make_grid(images.float(), nrow = 1, normalize = True, value_range = (0, 1))
         recons = make_grid(recons.float(), nrow = 1, normalize = True, value_range = (-1, 1))
 
-        #img_batch_decode -= img_batch_decode.min(1, keepdim=True)[0]
-        #img_batch_decode /= img_batch_decode.max(1, keepdim=True)[0]
-        matplotlib.use('qt5agg')
         f, ax = plt.subplots(1,2,figsize=(8,8))
         f.suptitle('\n'.join(text_batch_decode), fontname="MS Gothic")
         ax[0].axis('off')
         ax[0].imshow(images.permute(1,2,0))
         ax[1].axis('off')
         ax[1].imshow(recons.permute(1,2,0))
-
         plt.show()
-

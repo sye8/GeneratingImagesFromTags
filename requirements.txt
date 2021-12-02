@@ -1,6 +1,6 @@
+pytorch
+torchvision
 dalle-pytorch
 torchinfo
-pycocotools
-spacy
 tqdm
-
+tensorboard

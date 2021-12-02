@@ -41,27 +41,20 @@ def group_weight(model):
 
 if __name__ == '__main__':
 
-    #COCO_ROOT = "TEST_FAIL"
-    SAVE_PATH = "ckpts"
-
     parser = argparse.ArgumentParser(description="")
 
-    #parser.add_argument('--dvae_ckpt_path', type = str, default='big_dvae/dVAE_latest_8192_3_1_512_64_for_dalle.ckpt')
-    #parser.add_argument('--epochs', type = int, default = 64)
-    parser.add_argument('--dvae_ckpt_path', type = str)
-    parser.add_argument('--epochs', type = int, default=100)
-    parser.add_argument('--save_step', type = int, default = 1)
-    parser.add_argument('--dalle_ckpt_path', type = str, default='models/dalle_1.ckpt')
-    parser.add_argument('--dalle_ckpt_epoch', type = int, default= 0)
-    parser.add_argument('--img_subset', type = str)
-    parser.add_argument('--cap_subset', type = str)
+    parser.add_argument('dvae_ckpt_path', type = str)
+    parser.add_argument('--epochs', type = int, default = 100)
+    parser.add_argument('--save_step', type = int, default = 5)
+    parser.add_argument('--dalle_ckpt_path', type = str)
+    parser.add_argument('--dalle_ckpt_epoch', type = int)
 
     train_group = parser.add_argument_group('Training Settings')
     train_group.add_argument('--learning_rate', type = float, default = 1e-4, help = 'learning rate')
     train_group.add_argument('--lr_decay_rate', type = float, default = 0.5, help = 'learning rate decay')
     train_group.add_argument('--lr_min', type = float, default = 1.25e-6, help = 'learning rate min')
     train_group.add_argument('--num_images_save', type = int, default = 4, help = 'number of images to save')
-    train_group.add_argument('--batch_size', type = int, default = 10, help = 'batch_size')
+    train_group.add_argument('--batch_size', type = int, default = 8, help = 'batch_size')
 
     dvae_group = parser.add_argument_group('dVAE Settings')
     dvae_group.add_argument('--num_image_tokens', type = int, default = DVAE_NUM_TOKENS, help = 'number of image tokens')
@@ -103,17 +96,12 @@ if __name__ == '__main__':
     dalle_loss_img_weight = args.dalle_loss_img_weight
 
     transform = [transforms.Resize(IMAGE_SIZE),
-#                 transforms.RandomResizedCrop(IMAGE_SIZE,scale=(1,1)),
                  transforms.ToTensor(),
-#                 transforms.ColorJitter(brightness=0.025, contrast=0.025, saturation=0.2, hue=0)
                 ]
     transform = transforms.Compose(transform)
     
-    if args.img_subset is not None and args.cap_subset is not None:
-        train_set = CocoSubDataset(args.img_subset, args.cap_subset, os.path.join(COCO_ROOT, "dictionary"))
-    else:
-        train_set = PixivFacesDataset()
-    train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True, drop_last=True, persistent_workers=True, num_workers=8)
+    train_set = PixivFacesDataset(DATASET_ROOT, DALLE_TEXT_SEQ_LEN)
+    train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True, drop_last=True, num_workers=8)
 
     if torch.cuda.is_available():
         print("Using cuda")
@@ -121,7 +109,6 @@ if __name__ == '__main__':
     else:
         print("Using cpu")
         device = torch.device("cpu")
-
 
     vae_params = {
         'image_size' : IMAGE_SIZE,
@@ -134,14 +121,12 @@ if __name__ == '__main__':
 
     vae = DiscreteVAE(**vae_params)
 
-    if args.dvae_ckpt_path and os.path.isfile(args.dvae_ckpt_path):
+    if not os.path.isfile(args.dvae_ckpt_path):
         print(args.dvae_ckpt_path, "is not a file or doesn't exist!")
-        #quit()
-        dvae_state=torch.load(args.dvae_ckpt_path)
+        quit()
 
-        vae.load_state_dict(dvae_state)
-
-    #vae = vae.to(device)
+    vae.load_state_dict(torch.load(args.dvae_ckpt_path, map_location=torch.device(device)))
+    vae = vae.to(device)
     
     dalle_params = {
         "dim": emb_dim,
@@ -152,10 +137,10 @@ if __name__ == '__main__':
         "dim_head": dalle_dim_head,
         "attn_dropout": dalle_attn_dropout,
         "ff_dropout": dalle_ff_dropout,
-        'loss_img_weight': dalle_loss_img_weight,
-        'attn_types' : ('conv_like','full'),
-        'shift_tokens' : False,
-        'rotary_emb' : False     
+        "loss_img_weight": dalle_loss_img_weight,
+        "attn_types" : ('conv_like','full'),
+        "shift_tokens" : False,
+        "rotary_emb" : False
     }
     dalle = DALLE(vae=vae, **dalle_params)
 
@@ -171,12 +156,8 @@ if __name__ == '__main__':
         if not os.path.isfile(args.dalle_ckpt_path):
             print(args.dalle_ckpt_path, "is not a file or doesn't exist!")
             quit()
-        
         START_EPOCH = args.dalle_ckpt_epoch
         dalle_state=torch.load(args.dalle_ckpt_path)
-        #dalle_state=OrderedDict([(k,dalle_state[k]) for k in list(dalle_state.keys()) if not 'text_emb.weight' in k])
-        #dalle_state=OrderedDict([(k,dalle_state[k]) for k in list(dalle_state.keys()) if not 'to_logits.1.weight' in k])
-        #dalle_state=OrderedDict([(k,dalle_state[k]) for k in list(dalle_state.keys()) if not 'to_logits.1.bias' in k])
         dalle.load_state_dict(dalle_state,strict=False)
     else:
         with open(os.path.join(ckpts_dir, "config.txt"), "w") as f:
@@ -185,7 +166,6 @@ if __name__ == '__main__':
 
     dalle = dalle.to(device)
 
-    #opt = Adam(dalle.parameters(), lr = LEARNING_RATE)
     opt = AdamW(group_weight(dalle), lr = LEARNING_RATE, betas = (0.9, 0.96), eps = 1e-08, weight_decay = 4.5e-2, amsgrad = False)
     sched = ReduceLROnPlateau(
         opt,
@@ -199,7 +179,6 @@ if __name__ == '__main__':
 
     global_step = 0
     writer = SummaryWriter()
-    #scaler = GradScaler()
 
     for epoch in range(START_EPOCH, NUM_EPOCHS):
 
@@ -210,24 +189,18 @@ if __name__ == '__main__':
         for i, (imgs, tags) in enumerate(tqdm(train_loader)):
             opt.zero_grad()
             tags, imgs = map(lambda t: t.to(device), (tags, imgs))
-            #with autocast():
             loss = dalle(tags, imgs, return_loss=True)
             loss.backward()
-            #scaler.scale(loss).backward()
-            #scaler.unscale_(opt)
-            #clip_grad_norm_(dalle.parameters(), 0.5)
             epoch_losses.append(loss.item())
             step_losses.append(loss.item())
-            #scaler.step(opt)
-            #scaler.update()
             opt.step()
             opt.zero_grad()            
             
-            if (i+1) % 10 == 0: #mini-batch can only fit 2, need to accumulate gradient
+            if (i+1) % 10 == 0:
                 writer.add_scalar("Loss/train", epoch_losses[-1], global_step)
                 writer.add_scalar("lr", opt.param_groups[0]['lr'], global_step)
 
-                if (i+1) % 100 == 0: #quick fix for tensorboard not updating images?
+                if (i+1) % 100 == 0:
                     sched.step(mean(step_losses))
                     step_losses = []
                     if (i+1) % 5000 == 0:
@@ -241,7 +214,7 @@ if __name__ == '__main__':
                                 images = dalle.generate_images(tags[:1], filter_thres=0.9)  # topk sampling at 0.9
 
                                 images = images[:k].detach().cpu()
-                                images = make_grid(images.float(), nrow = int(math.sqrt(k)), normalize = True, range = (-1,1))
+                                images = make_grid(images.float(), nrow = int(math.sqrt(k)), normalize = True, value_range = (-1,1))
 
                                 writer.add_image('original images', images, global_step)
                                 writer.add_text('codebook_indices',decoded_text, global_step)
