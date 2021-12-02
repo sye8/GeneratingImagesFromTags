@@ -1,0 +1,6 @@
+dalle-pytorch
+torchinfo
+pycocotools
+spacy
+tqdm
+
