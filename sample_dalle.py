@@ -13,8 +13,6 @@ from torchvision import transforms
 from tqdm import tqdm
 
 from dalle_pytorch import DiscreteVAE, DALLE
-from dalle_pytorch.loader import TextImageDataset
-from dalle_pytorch.tokenizer import tokenizer
 
 from dataset import *
 
@@ -24,7 +22,6 @@ BATCH_SIZE = 4
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description="")
-    parser.add_argument('dvae_ckpt_path', type=str)
     parser.add_argument('dalle_ckpt_path', type=str)
     args = parser.parse_args()
 
@@ -43,8 +40,8 @@ if __name__ == '__main__':
         hidden_dim = DVAE_HIDDEN_DIM,
         num_resnet_blocks = DVAE_NUM_RESNET_BLOCKS,
     ).to(device)
-    vae.load_state_dict(torch.load(args.dvae_ckpt_path, map_location=torch.device(device)))
     vae = vae.to(device)
+    
     dalle = DALLE(
         vae = vae,                  
         dim = CODEBOOK_DIM,
@@ -66,24 +63,24 @@ if __name__ == '__main__':
     train_set = PixivFacesDataset(DATASET_ROOT, DALLE_TEXT_SEQ_LEN)
     train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
 
-    token_batch,img_batch = next(iter(train_loader))
-    token_batch,img_batch = map(lambda t: t.cuda(), (token_batch,img_batch))
+    img_batch, token_batch = next(iter(train_loader))
+    img_batch, token_batch = map(lambda t: t.cuda(), (img_batch, token_batch))
 
     with torch.no_grad():
         img_batch_decode = dalle.generate_images(token_batch, filter_thres = 0.90)
 
         text_batch_decode=[]
         for token in token_batch:
-            token_list = token.masked_select(token != 0).tolist()
-            decoded_text = tokenizer.decode(token_list)
+            token_list = token.masked_select(token != 0).tolist()[:8]
+            decoded_text = train_set.tokens2captions(token_list)
             text_batch_decode.append(decoded_text)
 
         images, recons = map(lambda t: t.detach().cpu(), (img_batch, img_batch_decode))
-        images = make_grid(images.float(), nrow = 1, normalize = True, value_range = (0, 1))
-        recons = make_grid(recons.float(), nrow = 1, normalize = True, value_range = (-1, 1))
+        images = make_grid(images.float(), nrow = 4, normalize = True, value_range = (0, 1))
+        recons = make_grid(recons.float(), nrow = 4, normalize = True, value_range = (-1, 1))
 
-        f, ax = plt.subplots(1,2,figsize=(8,8))
-        f.suptitle('\n'.join(text_batch_decode), fontname="MS Gothic")
+        f, ax = plt.subplots(2,1,figsize=(8,4))
+        f.suptitle('\n'.join(text_batch_decode), y=1.0, fontsize=8)
         ax[0].axis('off')
         ax[0].imshow(images.permute(1,2,0))
         ax[1].axis('off')
