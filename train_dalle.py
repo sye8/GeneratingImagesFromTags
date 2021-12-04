@@ -182,27 +182,36 @@ if __name__ == '__main__':
 
     for epoch in range(START_EPOCH, NUM_EPOCHS):
 
-        epoch_losses = []
-        step_losses = []
+        epoch_loss = 0
+        accum_loss = 0
+        step_loss = 0
+        num_steps_accum = 0
+        num_steps_sched = 0
         opt.zero_grad()
 
         for i, (imgs, tags) in enumerate(tqdm(train_loader)):
-            opt.zero_grad()
             tags, imgs = map(lambda t: t.to(device), (tags, imgs))
             loss = dalle(tags, imgs, return_loss=True)
-            loss.backward()
-            epoch_losses.append(loss.item())
-            step_losses.append(loss.item())
-            opt.step()
-            opt.zero_grad()            
             
-            if (i+1) % 10 == 0:
-                writer.add_scalar("Loss/train", epoch_losses[-1], global_step)
+            epoch_loss += loss.item()    
+            accum_loss += loss 
+            step_loss += loss.item()
+            num_steps_accum += 1
+            num_steps_sched += 1
+            
+            if (i+1) % 5 == 0:
+                writer.add_scalar("Avg Accmulated Loss/train", accum_loss.item()/num_steps_accum, global_step)
                 writer.add_scalar("lr", opt.param_groups[0]['lr'], global_step)
+                
+                accum_loss.bachward()
+                opt.step()
+                opt.zero_grad()
+                num_steps_accum = 0
 
                 if (i+1) % 100 == 0:
-                    sched.step(mean(step_losses))
-                    step_losses = []
+                    sched.step(step_loss/num_steps_sched)
+                    step_loss = 0
+                    num_steps_sched = 0
                     if (i+1) % 5000 == 0:
                         k = NUM_IMAGES_SAVE
                         try:
@@ -223,10 +232,13 @@ if __name__ == '__main__':
                                 print("Saving checkpoint", 'dalle_temp.ckpt', "to", ckpts_dir)
                                 torch.save(dalle.state_dict(), os.path.join(ckpts_dir, 'dalle_temp.ckpt'), _use_new_zipfile_serialization=False)
                         except RuntimeError:
+                            print("Failed to save sample to tensorboard!")
                             pass
             global_step += 1
         
-        print("Done epoch", epoch + 1, "with mean loss", mean(epoch_losses))
+        accum_loss.bachward()
+        opt.step()
+        print("Done epoch", epoch + 1, "with mean epoch loss", epoch_loss/len(train_loader))
         
         if (epoch + 1) % SAVE_STEP == 0:
             ckpt_name = "dalle_" + str(epoch+1) + ".ckpt"
