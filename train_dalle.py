@@ -25,6 +25,9 @@ from tqdm import tqdm
 from dataset import *
 from configs import *
 
+def get_trainable_params(model):
+    return [params for params in model.parameters() if params.requires_grad]
+
 def group_weight(model):
     group_decay, group_no_decay = [], []
     for params in model.named_parameters():
@@ -95,7 +98,9 @@ if __name__ == '__main__':
     dalle_ff_dropout = args.dalle_ff_dropout
     dalle_loss_img_weight = args.dalle_loss_img_weight
 
-    transform = [transforms.Resize(IMAGE_SIZE),
+    transform = [transforms.RandomResizedCrop(IMAGE_SIZE,
+                 scale=(0.95, 1.),
+                 ratio=(1., 1.)),
                  transforms.ToTensor(),
                 ]
     transform = transforms.Compose(transform)
@@ -121,12 +126,12 @@ if __name__ == '__main__':
 
     vae = DiscreteVAE(**vae_params)
 
-    if not os.path.isfile(args.dvae_ckpt_path):
-        print(args.dvae_ckpt_path, "is not a file or doesn't exist!")
-        quit()
+    if args.dvae_ckpt_path and os.path.isfile(args.dvae_ckpt_path):
+        #print(args.dvae_ckpt_path, "is not a file or doesn't exist!")
+        #quit()
 
-    vae.load_state_dict(torch.load(args.dvae_ckpt_path, map_location=torch.device(device)))
-    vae = vae.to(device)
+        vae.load_state_dict(torch.load(args.dvae_ckpt_path, map_location=torch.device(device)))
+        #vae = vae.to(device)
     
     dalle_params = {
         "dim": emb_dim,
@@ -167,6 +172,7 @@ if __name__ == '__main__':
     dalle = dalle.to(device)
 
     opt = AdamW(group_weight(dalle), lr = LEARNING_RATE, betas = (0.9, 0.96), eps = 1e-08, weight_decay = 4.5e-2, amsgrad = False)
+
     sched = ReduceLROnPlateau(
         opt,
         mode="min",
@@ -192,27 +198,30 @@ if __name__ == '__main__':
         for i, (imgs, tags) in enumerate(tqdm(train_loader)):
             tags, imgs = map(lambda t: t.to(device), (tags, imgs))
             loss = dalle(tags, imgs, return_loss=True)
+            loss.backward()
             
             epoch_loss += loss.item()    
-            accum_loss += loss 
+            accum_loss += loss.item()   
             step_loss += loss.item()
             num_steps_accum += 1
             num_steps_sched += 1
             
             if (i+1) % 5 == 0:
-                writer.add_scalar("Avg Accmulated Loss/train", accum_loss.item()/num_steps_accum, global_step)
+                writer.add_scalar("Avg Accmulated Loss/train", accum_loss/num_steps_accum, global_step)
                 writer.add_scalar("lr", opt.param_groups[0]['lr'], global_step)
-                
-                accum_loss.bachward()
+                clip_grad_norm_(dalle.parameters(), 0.5)
+                #accum_loss.backward(), does not save vram?
                 opt.step()
                 opt.zero_grad()
+
+                accum_loss = 0
                 num_steps_accum = 0
 
                 if (i+1) % 100 == 0:
                     sched.step(step_loss/num_steps_sched)
                     step_loss = 0
                     num_steps_sched = 0
-                    if (i+1) % 5000 == 0:
+                    if (i+1) % 2000 == 0:
                         k = NUM_IMAGES_SAVE
                         try:
                             with torch.no_grad():
@@ -235,9 +244,10 @@ if __name__ == '__main__':
                             print("Failed to save sample to tensorboard!")
                             pass
             global_step += 1
-        
-        accum_loss.bachward()
-        opt.step()
+
+        #opt.step() throw away last graph, it was erroring out
+        opt.zero_grad()
+
         print("Done epoch", epoch + 1, "with mean epoch loss", epoch_loss/len(train_loader))
         
         if (epoch + 1) % SAVE_STEP == 0:
