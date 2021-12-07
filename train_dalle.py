@@ -105,7 +105,7 @@ if __name__ == '__main__':
                 ]
     transform = transforms.Compose(transform)
     
-    train_set = PixivFacesDataset(DATASET_ROOT, DALLE_TEXT_SEQ_LEN)
+    train_set = PixivFacesDataset(DATASET_ROOT, DALLE_TEXT_SEQ_LEN, transform)
     train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True, drop_last=True, num_workers=8)
 
     if torch.cuda.is_available():
@@ -127,11 +127,8 @@ if __name__ == '__main__':
     vae = DiscreteVAE(**vae_params)
 
     if args.dvae_ckpt_path and os.path.isfile(args.dvae_ckpt_path):
-        #print(args.dvae_ckpt_path, "is not a file or doesn't exist!")
-        #quit()
-
         vae.load_state_dict(torch.load(args.dvae_ckpt_path, map_location=torch.device(device)))
-        #vae = vae.to(device)
+
     
     dalle_params = {
         "dim": emb_dim,

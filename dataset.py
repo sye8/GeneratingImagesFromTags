@@ -3,6 +3,8 @@ import pickle
 
 import torch
 
+import torch.nn.functional as F
+
 import numpy as np
 
 from collections import Counter
@@ -37,7 +39,7 @@ class ImageDataset(Dataset):
     
 
 class PixivFacesDataset(Dataset):
-    def __init__(self, path, max_cap_len):
+    def __init__(self, path, max_cap_len, transform, multihot=False):
         self.path = path
         self.max_cap_len = max_cap_len
         self.imgs = []
@@ -47,7 +49,8 @@ class PixivFacesDataset(Dataset):
             if f_lower.endswith(".jpg"):
                 self.imgs.append(f)
                 self.tags.append(".".join(f.split(".")[:-1]) + ".txt")
-        self.transform = transforms.Compose([transforms.Resize((128, 128)), transforms.ToTensor()])
+        self.transform = transform
+        self.multihot = multihot
         tok2idx_path = os.path.join(self.path, "tok2idx.pkl")
         idx2tok_path = os.path.join(self.path, "idx2tok.pkl")
         if not os.path.exists(tok2idx_path) or not os.path.exists(idx2tok_path):
@@ -78,7 +81,10 @@ class PixivFacesDataset(Dataset):
         
     def __getitem__(self, idx):
         tags = open(os.path.join(self.path, self.tags[idx]), "r").read()
-        tags = torch.tensor(self.caption2tokens(tags)).long()
+        if not self.multihot:
+            tags = torch.tensor(self.caption2tokens(tags)).long()
+        else:
+            tags = self.tags2multihot(tags).float()
         img = Image.open(os.path.join(self.path, self.imgs[idx])).convert("RGB")
         if self.transform is not None:
             img = self.transform(img)

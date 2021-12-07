@@ -23,8 +23,9 @@ from dalle_pytorch import DiscreteVAE
 
 from tqdm import tqdm
 
-from dataset import *
 from cvae import *
+from configs import *
+from dataset import *
 
 
 def tags_to_multihot(tags):
@@ -38,15 +39,23 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description="")
     
+    parser.add_argument('dvae_ckpt_path', type = str)
     parser.add_argument('--epochs', type = int, default = 1000)
     parser.add_argument('--save_step', type = int, default = 100)
     parser.add_argument('--use_attn', action='store_true', default=False)
-    parser.add_argument('--use_embs', action='store_true', default=False)
+    
+    dvae_group = parser.add_argument_group('dVAE Settings')
+    dvae_group.add_argument('--num_image_tokens', type = int, default = DVAE_NUM_TOKENS, help = 'number of image tokens')
+    dvae_group.add_argument('--num_layers', type = int, default = DVAE_NUM_LAYERS, help = 'number of layers (should be 3 or above)')
+    dvae_group.add_argument('--num_resnet_blocks', type = int, default = DVAE_NUM_RESNET_BLOCKS, help = 'number of residual net blocks')
+    dvae_group.add_argument('--emb_dim', type = int, default = CODEBOOK_DIM, help = 'embedding dimension')
+    dvae_group.add_argument('--hidden_dim', type = int, default = DVAE_HIDDEN_DIM, help = 'hidden dimension')
     
     train_group = parser.add_argument_group('Training Settings')
     train_group.add_argument('--learning_rate', type = float, default = 1e-3, help = 'Learning Rate')
     train_group.add_argument('--kl_weight', type = int, default = 1.0, help = 'KL divergence weight')
     train_group.add_argument('--batch_size', type = int, default = 16, help = 'Batch Size')
+    train_group.add_argument('--num_images_save', type = int, default = 4, help = 'number of images to save')
     
     args = parser.parse_args()
     
@@ -56,9 +65,17 @@ if __name__ == '__main__':
     BATCH_SIZE = args.batch_size
     KL_WEIGHT = args.kl_weight
     
-    NUM_IMAGES_SAVE = 4
+    NUM_IMAGES_SAVE = args.num_images_save
     
-    dataset = PixivFacesDataset(args.use_embs)
+    num_layers = args.num_layers
+    num_image_tokens = args.num_image_tokens
+    emb_dim = args.emb_dim
+    hidden_dim = args.hidden_dim
+    num_resnet_blocks = args.num_resnet_blocks
+    
+    transform = transforms.Compose([transforms.Resize((128, 128)), transforms.ToTensor()])
+    
+    dataset = PixivFacesDataset(DATASET_ROOT, DALLE_TEXT_SEQ_LEN, transform, multihot=True)
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, pin_memory=True, num_workers=8)
     
     if torch.cuda.is_available():
@@ -68,17 +85,19 @@ if __name__ == '__main__':
         print("Using cpu")
         device = torch.device("cpu")
     
-    vae = None
-    if not args.use_embs:
-        print("Using actual images and dVAE")
-        vae_params = torch.load("vae_params.pt")
-        vae = DiscreteVAE(**vae_params)
-        vae_weights = torch.load("vae_weights.pt", map_location=torch.device(device))
-        vae.load_state_dict(vae_weights)
-        vae = vae.to(device)
-        # Set vae no grad
-        for param in vae.parameters():
-            param.requires_grad = False
+    vae_params = {
+        'image_size' : IMAGE_SIZE,
+        'num_layers' : num_layers,
+        'num_tokens' : num_image_tokens,
+        'codebook_dim' : emb_dim,
+        'hidden_dim'   : hidden_dim,
+        'num_resnet_blocks' : num_resnet_blocks
+    }
+    
+    vae = DiscreteVAE(**vae_params)
+    
+    if args.dvae_ckpt_path and os.path.isfile(args.dvae_ckpt_path):
+        vae.load_state_dict(torch.load(args.dvae_ckpt_path, map_location=torch.device(device)))
     
     if args.use_attn:
         print("Using attention")
@@ -114,9 +133,7 @@ if __name__ == '__main__':
         
         for i, (inputs, tags) in enumerate(tqdm(dataloader)):
             inputs, tags = map(lambda t: t.to(device), (inputs, tags))
-            
-            if not args.use_embs:
-                inputs = vae(inputs, return_logits=True)
+            inputs = vae(inputs, return_logits=True)
             
             result, mu, log_var = cvae(inputs, tags)
             
@@ -138,19 +155,17 @@ if __name__ == '__main__':
                 
                 if global_step % 50 == 49:
                     sched.step(torch.mean(loss))
-                    # Since no dVAE if loaded if using embeddings, cannot sample images
-                    if not args.use_embs:
-                        # Sample
-                        sample_tags = tags[0]
-                        embedding = cvae.sample(NUM_IMAGES_SAVE, device, sample_tags.repeat(NUM_IMAGES_SAVE, 1).float())
-                        # Img Recon
-                        images = vae.decoder(embedding)
-                        images = make_grid(images.float(), nrow = int(math.sqrt(NUM_IMAGES_SAVE)), normalize = True, value_range = (-1,1)).detach().cpu()
-                        writer.add_image('generated images', images, global_step)
-                        # Tags
-                        tags_str = dataset.multihot2tags(sample_tags)
-                        writer.add_text('tags', tags_str, global_step)
-                        writer.flush()
+                    # Sample
+                    sample_tags = tags[0]
+                    embedding = cvae.sample(NUM_IMAGES_SAVE, device, sample_tags.repeat(NUM_IMAGES_SAVE, 1).float())
+                    # Img Recon
+                    images = vae.decoder(embedding)
+                    images = make_grid(images.float(), nrow = int(math.sqrt(NUM_IMAGES_SAVE)), normalize = True, value_range = (-1,1)).detach().cpu()
+                    writer.add_image('generated images', images, global_step)
+                    # Tags
+                    tags_str = dataset.multihot2tags(sample_tags)
+                    writer.add_text('tags', tags_str, global_step)
+                    writer.flush()
                     
             global_step += 1
         
