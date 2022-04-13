@@ -19,7 +19,7 @@ NUM_SAMPLES = 1
 BATCH_SIZE = 4
 
 parser = argparse.ArgumentParser(description="")
-parser.add_argument('ckpt_path', type=str)
+parser.add_argument('--ckpt_path', type=str, default='GeneratingImagesFromTags/ckpts/vae_weights.pt')
 args = parser.parse_args()
 
 if torch.cuda.is_available():
@@ -49,13 +49,16 @@ transform = [transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)), transforms.ToTensor()]
 transform = transforms.Compose(transform)
 
 train_set = ImageDataset(DATASET_ROOT, transform)
-train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True)
+train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=False)
 
 for _ in range(NUM_SAMPLES):
     img_batch = torch.Tensor(next(iter(train_loader))).to(device)
 
     with torch.no_grad():
         img_codes = vae.get_codebook_indices(img_batch)
+        img_codes[0,:]=((img_codes[2,:]-img_codes[3,:])==0)*img_codes[2,:]
+        img_codes[1,:]=((img_codes[2,:]-img_codes[3,:])!=0)*img_codes[2,:]
+        
         img_batch_decode = vae.decode(img_codes)
         images, recons = map(lambda t: t.detach().cpu(), (img_batch, img_batch_decode))
         images, recons = map(lambda t: make_grid(t[1].float(), nrow = int(sqrt(BATCH_SIZE)), normalize = True, value_range = tuple(np.array([[0, 1],[-1,1]])[t[0],:])), enumerate([images, recons]))

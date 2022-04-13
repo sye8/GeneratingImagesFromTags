@@ -32,10 +32,13 @@ dalle = DALLE(
     heads = DALLE_HEADS,
     dim_head = DALLE_DIM_HEAD,
     attn_dropout = DALLE_ATTN_DROPOUT,
-    ff_dropout = DALLE_FF_DROPOUT
+    ff_dropout = DALLE_FF_DROPOUT,
+    attn_types = ('axial_row'),
+    shift_tokens = False,
+    rotary_emb = False      
 )
 
-BATCH_SIZE = 8
+BATCH_SIZE = 1
 
 print("Batch size:", BATCH_SIZE)
 

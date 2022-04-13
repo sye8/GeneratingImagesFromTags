@@ -20,7 +20,7 @@ import sys
 
 sys.path.insert(0,'c:/Users/thapp/work/dalle_pytorch')
 sys.path.insert(0,'c:/Users/thapp/work/taming-transformers')
-from dalle_pytorch import VQGanVAE, DALLE
+from dalle_pytorch import VQGanVAE, DALLE, CLIP
 
 from tqdm import tqdm
 
@@ -30,37 +30,21 @@ from configs import *
 def get_trainable_params(model):
     return [params for params in model.parameters() if params.requires_grad]
 
-def group_weight(model):
-    group_decay, group_no_decay = [], []
-    for params in model.named_parameters():
-        if 'transformer' in params[0]:
-            if 'bias' in params[0] or 'norm' in params[0]:
-                group_no_decay.append(params[1])
-                continue
-        group_decay.append(params[1])
-
-    assert len(list(model.parameters())) == len(group_decay) + len(group_no_decay)
-    groups = [dict(params=group_decay), dict(params=group_no_decay, weight_decay=.0)]
-    return groups
-
-
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description="")
 
-    parser.add_argument('--dvae_ckpt_path', type = str, default = 'checkpoints/2022-03-07T17-21-57_custom_vqgan/testtube/version_0/checkpoints/epoch=715-step=579200.ckpt')
-    parser.add_argument('--dvae_ckpt_conf', type = str, default = 'checkpoints/2022-03-07T17-21-57_custom_vqgan/configs/2022-03-07T17-21-57-project.yaml')
     parser.add_argument('--epochs', type = int, default = 500)
     parser.add_argument('--save_step', type = int, default = 5)
-    parser.add_argument('--dalle_ckpt_path', type = str, default = 'checkpoints/202203150305/dalle_temp.ckpt')
-    parser.add_argument('--dalle_ckpt_epoch', type = int, default=0)
+    parser.add_argument('--clip_ckpt_path', type = str, default = None)
+    parser.add_argument('--clip_ckpt_epoch', type = int, default=0)
 
     train_group = parser.add_argument_group('Training Settings')
-    train_group.add_argument('--learning_rate', type = float, default = 2e-7, help = 'learning rate')
+    train_group.add_argument('--learning_rate', type = float, default = 1e-4, help = 'learning rate')
     train_group.add_argument('--lr_decay_rate', type = float, default = 0.5, help = 'learning rate decay')
     train_group.add_argument('--lr_min', type = float, default = 1e-8, help = 'learning rate min')
     train_group.add_argument('--num_images_save', type = int, default = 4, help = 'number of images to save')
-    train_group.add_argument('--batch_size', type = int, default = 12, help = 'batch_size')
+    train_group.add_argument('--batch_size', type = int, default = 64, help = 'batch_size')
 
     dvae_group = parser.add_argument_group('dVAE Settings')
     dvae_group.add_argument('--num_image_tokens', type = int, default = DVAE_NUM_TOKENS, help = 'number of image tokens')
@@ -115,69 +99,47 @@ if __name__ == '__main__':
         print("Using cpu")
         device = torch.device("cpu")
 
-    #vae_params = {
-    #    'image_size' : IMAGE_SIZE,
-    #    'num_layers' : num_layers,
-    #    'num_tokens' : num_image_tokens,
-    #    'codebook_dim' : emb_dim,
-    #    'hidden_dim'   : hidden_dim,
-    #    'num_resnet_blocks' : num_resnet_blocks
-    #}
-
-    vae = VQGanVAE(args.dvae_ckpt_path,args.dvae_ckpt_conf)
-
-    #if args.dvae_ckpt_path and os.path.isfile(args.dvae_ckpt_path):
-    #    vae.load_state_dict(torch.load(args.dvae_ckpt_path))
-
-    
-    dalle_params = {
-        "dim": emb_dim,
-        "num_text_tokens": VOCAB_SIZE,
-        "text_seq_len": DALLE_TEXT_SEQ_LEN,
-        "depth": dalle_depth,
-        "heads": dalle_heads,
-        "dim_head": dalle_dim_head,
-        "attn_dropout": dalle_attn_dropout,
-        "ff_dropout": dalle_ff_dropout,
-        "loss_img_weight": dalle_loss_img_weight,
-        "attn_types" : ('full',),
-        "shift_tokens" : False,
-        "rotary_emb" : False
+    clip_params = {
+        "dim_text" : emb_dim,
+        "dim_image" : emb_dim,
+        "dim_latent" : CLIP_DIM_LATENT,
+        "num_text_tokens" : VOCAB_SIZE,
+        "text_enc_depth" : dalle_depth,
+        "text_seq_len" : DALLE_TEXT_SEQ_LEN,
+        "text_heads" : dalle_heads,
+        "num_visual_tokens" : DVAE_HIDDEN_DIM,
+        "visual_enc_depth" : CLIP_VISUAL_ENC_DEPTH,
+        "visual_image_size" : IMAGE_SIZE,
+        "visual_patch_size" : CLIP_PATCH_SIZE,
+        "visual_heads" : CLIP_HEADS
     }
-    dalle = DALLE(vae=vae, **dalle_params)
 
-    dalle_params_str = ""
-    for k in dalle_params:
-        dalle_params_str += k + ": " + str(dalle_params[k]) + "\n"
-    print("DALL-E params:")
-    print(dalle_params_str)
+    clip = CLIP(**clip_params)
+
+    clip_params_str = ""
+    for k in clip_params:
+        clip_params_str += k + ": " + str(clip_params[k]) + "\n"
+    print("CLIP params:")
+    print(clip_params_str)
 
     ckpts_dir = os.path.join(SAVE_PATH, datetime.now().strftime("%Y%m%d%H%M"))
     os.makedirs(ckpts_dir,exist_ok=True)
-    if args.dalle_ckpt_path is not None and args.dalle_ckpt_epoch is not None:
-        if not os.path.isfile(args.dalle_ckpt_path):
-            print(args.dalle_ckpt_path, "is not a file or doesn't exist!")
+    if args.clip_ckpt_path is not None and args.clip_ckpt_epoch is not None:
+        if not os.path.isfile(args.clip_ckpt_path):
+            print(args.clip_ckpt_path, "is not a file or doesn't exist!")
             quit()
-        START_EPOCH = args.dalle_ckpt_epoch
-        dalle_state=torch.load(args.dalle_ckpt_path)
-        #del dalle_state['text_pos_emb.weight']
-        #del dalle_state['to_logits.1.weight']
-        #del dalle_state['to_logits.1.bias']
-        #del dalle_state['text_emb.weight']
-        #dalle_new_state=OrderedDict()
-        #for k in dalle_state.keys():
-        #    if 'vae.' not in k:
-        #        dalle_new_state[k] = dalle_state[k]
-        dalle.load_state_dict(dalle_state,strict=False)
+        START_EPOCH = args.clip_ckpt_epoch
+        clip_state=torch.load(args.clip_ckpt_path)
+        clip.load_state_dict(clip_state,strict=False)
     else:
         with open(os.path.join(ckpts_dir, "config.txt"), "w") as f:
-            f.write(dalle_params_str)
+            f.write(clip_params_str)
         START_EPOCH = 0
 
-    dalle = dalle.to(device)
+    clip = clip.to(device)
 
     #opt = AdamW(group_weight(dalle), lr = LEARNING_RATE, betas = (0.9, 0.96), eps = 1e-08, weight_decay = 4.5e-2, amsgrad = False)
-    opt = Adam(get_trainable_params(dalle), lr = LEARNING_RATE)
+    opt = Adam(get_trainable_params(clip), lr = LEARNING_RATE)
 
     sched = ReduceLROnPlateau(
         opt,
@@ -204,7 +166,7 @@ if __name__ == '__main__':
 
         for i, (imgs, tags) in enumerate(tqdm(train_loader)):
             tags, imgs = map(lambda t: t.to(device), (tags, imgs))
-            loss = dalle(tags, imgs, return_loss=True)
+            loss = clip(tags, imgs, return_loss=True)
             (loss/grad_acc).backward()
             opt.step()
             opt.zero_grad()
@@ -218,7 +180,7 @@ if __name__ == '__main__':
             if (i+1) % grad_acc == 0:
                 writer.add_scalar("Avg Accmulated Loss/train", accum_loss/num_steps_accum, global_step)
                 writer.add_scalar("lr", opt.param_groups[0]['lr'], global_step)
-                clip_grad_norm_(dalle.parameters(), 0.5)
+                clip_grad_norm_(clip.parameters(), 0.5)
                 #accum_loss.backward(), does not save vram?
 
                 accum_loss = 0
@@ -228,28 +190,12 @@ if __name__ == '__main__':
                     sched.step(step_loss/num_steps_sched)
                     step_loss = 0
                     num_steps_sched = 0
-                    if (i+1) % 500 == 0:
+                    if (i+1) % 200 == 0:
                         k = NUM_IMAGES_SAVE
                         try:
                             with torch.no_grad():
-                                sample_text = tags[:1]
-                                sample_img = imgs[:1]
-                                token_list = sample_text.masked_select(sample_text != 0).tolist()
-                                decoded_text = train_set.tokens2captions(token_list)
-                                
-                                images = dalle.generate_images(tags[:1], filter_thres=0.9)  # topk sampling at 0.9
-
-                                images = images[:k].detach().cpu()
-                                sample_img = sample_img.detach().cpu()
-                                images = torch.cat([sample_img,images])
-                                images = make_grid(images, nrow = int(math.sqrt(k)), normalize = True, value_range = (0,1))
-
-                                writer.add_image('original images', images, global_step)
-                                writer.add_text('codebook_indices',decoded_text, global_step)
-                                writer.flush()
-
-                                print("Saving checkpoint", 'dalle_temp.ckpt', "to", ckpts_dir)
-                                torch.save(dalle.state_dict(), os.path.join(ckpts_dir, 'dalle_temp.ckpt'), _use_new_zipfile_serialization=False)
+                                print("Saving checkpoint", 'clip_temp.ckpt', "to", ckpts_dir)
+                                torch.save(clip.state_dict(), os.path.join(ckpts_dir, 'clip_temp.ckpt'), _use_new_zipfile_serialization=False)
                         except RuntimeError:
                             print("Failed to save sample to tensorboard!")
                             pass
